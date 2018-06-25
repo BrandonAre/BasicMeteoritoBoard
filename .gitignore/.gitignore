@@ -1,0 +1,185 @@
+#include <WiFi.h>
+const char* ssid     = "INFINITUM4807";
+const char* password = "VTrisUYc6d";
+//WiFiServer server(80);
+//Pagina de conexión con el servidor
+const char* Servidor  = "redmet.org";
+
+//Token de acceso a redmet.org
+const String Token = "ZGUyZmI4M2YtNTViZS00ZWIzLThmYWYtNTdjZGQ0YTlhZDQyOmY1MjQzMzZhLWUyZDgtNGJiNi1iZGNiLTIwNTYwZGY5NDU2Mg==";
+
+#include  "DHT.h"
+#include <SFE_BMP180.h>
+#include <Wire.h>
+
+//Parametros DHT22
+float temperatura;
+float humedad;
+
+//Parametros BMP180
+char status;
+double tem,presion;
+
+//Parametros nubosidad
+const char tipoNubosidad[5]={'C','M','N','P','D'};
+  /* D - despejado
+   * P - poco nuboso
+   * N - nuboso
+   * M - muy nuboso
+   * C - cubierto
+   * O - 
+   */
+//Parametros radiación UV
+byte uv = 0;
+SFE_BMP180 sensorPresion;
+DHT dht(23, DHT22);
+
+//Parametros efecto hall
+int pinSensorHall = 14;
+int ledPin = 27;
+int estado = 0;
+
+//Header para pagina
+String httpHeader = "POST /api/device/metrics HTTP/1.1\r\n"
+                    "Host: redmet.org\r\n" 
+                    "Content-Type: application/json\r\n"
+                    "Authorization: Basic "+ Token +"\r\n";
+//Inicializar el WiFi cliente objeto
+WiFiClient client;
+                    
+
+
+void setup(){
+  pinMode(ledPin, OUTPUT);
+  pinMode(pinSensorHall, INPUT);
+  Serial.begin(115200);
+  dht.begin();
+  sensorPresion.begin();
+ 
+  //Setup WiFi
+  WiFi.begin(ssid, password);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+  Serial.println("Conectando...");
+  delay(2000);
+    }
+//Tu estas conectado ahora
+  Serial.println("Tu estas conectado a la red WiFi");
+  
+  Serial.print(WiFi.status());
+  }
+
+ void loop(){
+  //Obteniendo temperatura
+  temperatura = dht.readTemperature();
+  Serial.print("Temperatura:");
+  Serial.print(temperatura);
+  Serial.println(" C");
+  delay(2000);
+  //Obteniendo humedad
+  humedad = dht.readHumidity();
+  Serial.print("Humedad:");
+  Serial.print(humedad);
+  Serial.println(" %");
+  delay(2000);
+  //Obteniendo presion
+  status = sensorPresion.startTemperature(); 
+  delay(status);
+  sensorPresion.getTemperature(tem);
+  status = sensorPresion.startPressure(3);
+  delay(status);
+  sensorPresion.getPressure(presion,tem);
+  Serial.print("Presion absoluta:  ");
+  Serial.print(presion*0.1,2);
+  Serial.println( " KPa");
+  delay(500); 
+  //Obteniendo nubosidad
+  int lecturaSensor=analogRead(13);
+  char nubosidad = tipoNubosidad[map(lecturaSensor, 0, 1023, 0, 4)];
+  Serial.print("Nubosidad: ");
+  Serial.println(nubosidad);
+  delay(500);
+  //Obteniendo radiación UV
+  uv = map(analogRead(12),0,4095,0,15);
+  Serial.print("Radiación UV: ");
+  Serial.println(uv);
+  delay(1000);
+  //Sensor Hall
+  estado = digitalRead(pinSensorHall);
+  if (estado == LOW){
+    digitalWrite(ledPin, HIGH);
+  }
+    else {
+      digitalWrite(ledPin, LOW);
+      }
+
+  //Envio datos
+    if (client.connect(Servidor, 80) <= 0)
+  {
+    Serial.println(F("Fallo conexion a servidor."));
+    return;
+  }
+  Serial.println(F("Connected."));
+
+  //Asignar parametros a enviar:
+         /*clouds, humidity, pressure, rain, temp, uv, windDirection, windSpeed*/
+  String clouds, humidity, pressure, rain, temp, indiceUV, windDirection, windSpeed;
+  
+  clouds = String(nubosidad);
+  humidity = String(humedad);
+  pressure = String(presion*0.1);
+ // rain = String(random(0,250));
+  temp = String(temperatura);
+  indiceUV = String(uv);
+  //windDirection = String(random(0,360));
+  //windSpeed = String(random(0,360));
+
+//cargamos una cadena con los datos
+  /*El formato es "{\"data\":{\"metrica\":valor}}"*/
+  
+  //Ejemplo con un solo valor constante
+  //String dato="{\"data\":{\"temp\":15}}";
+
+  //Ejemplo con todos los valores posibles constantes
+  //String dato="{\"data\":{\"clouds\":\"D\",\"humidity\":95,\"pressure\":145,\"rain\":245,\"temp\":15,\"uv\":13,\"windDirection\":9,\"windSpeed\":340}}";
+  
+  //Lectura de todos los valores posibles
+  String dato="{\"data\":{\"clouds\":\"P\",\"humidity\":\""+humidity+"\",\"pressure\":\""+pressure+"\",\"temp\":\""+temp+"\",\"uv\":\""+indiceUV+"\"}}";
+  
+  Serial.println(F("Enviando datos!"));
+  Serial.println(dato);
+
+  client.print(httpHeader);
+  client.print("Content-Length: "); 
+  client.println(dato.length());
+  client.println();
+  client.println(dato);
+
+  unsigned long timeout = millis();
+    while (client.available() == 0) {
+        if (millis() - timeout > 5000) {
+            Serial.println(">>> Client Timeout !");
+            client.stop();
+            return;
+        }
+    }
+
+    // Read all the lines of the reply from server and print them to Serial
+    while(client.available()) {
+        String line = client.readStringUntil('\r');
+        Serial.print(line);
+    }
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // imprime la dirección IP de tu estacion WiFi
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  // imprime la intensidad de la señal recibida
+  long rssi = WiFi.RSSI();
+  Serial.print("Signal strength (RSSI):");
+  Serial.print(rssi);
+  Serial.println(" dBm");
+  } 
